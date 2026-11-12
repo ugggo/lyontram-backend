@@ -39,3 +39,30 @@ jobs:
           git add -A
           git commit -q -m "build GTFS $(date -u +%FT%TZ)"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
+
+      - name: Notify Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL absent, notification ignorée"
+            exit 0
+          fi
+
+          details=""
+          if [ "$JOB_STATUS" = "success" ]; then
+            title=":white_check_mark: *build-gtfs OK* (${TRIGGER})"
+            if [ -f etl/out/manifest.json ]; then
+              details=$(jq -r '"\(.stopCount) arrêts · valide jusqu’au \(.validThrough)"' etl/out/manifest.json)
+            fi
+          else
+            title=":x: *build-gtfs ${JOB_STATUS}* (${TRIGGER}) — horaires non publiés"
+          fi
+
+          jq -n --arg title "$title" --arg details "$details" --arg url "$RUN_URL" \
+            '{text: ([$title, $details, "<\($url)|Voir le run>"] | map(select(. != "")) | join("\n"))}' \
+            | curl -sS --fail -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL"
